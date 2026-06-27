@@ -14,10 +14,20 @@ const fs = require("fs");
 const path = require("path");
 
 const BASE_URL = "https://www.bgmea.com.bd";
-const LIST_URL = `${BASE_URL}/factorylist`;
 const OUTPUT_DIR = path.join(__dirname, "..", "output");
 const OUTPUT_FILE = path.join(OUTPUT_DIR, "bgmea_bins.csv");
 const DELAY_MS = 1500;
+
+// BGMEA changes their URLs periodically. We try multiple known patterns.
+const CANDIDATE_LIST_URLS = [
+  `${BASE_URL}/member/memberlist`,
+  `${BASE_URL}/member-list`,
+  `${BASE_URL}/factory-list`,
+  `${BASE_URL}/factorylist`,
+  `${BASE_URL}/members`,
+  `${BASE_URL}/page/member-list`,
+  `${BASE_URL}/page/factory-list`,
+];
 
 const HEADERS = {
   "User-Agent":
@@ -204,6 +214,12 @@ async function run() {
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
   }
 
+  // Check for --url flag (user can provide exact URL)
+  const urlIdx = process.argv.indexOf("--url");
+  let listUrl = urlIdx !== -1 && process.argv[urlIdx + 1]
+    ? process.argv[urlIdx + 1]
+    : null;
+
   // Test connection
   console.log("[*] Testing connection to BGMEA...");
   try {
@@ -215,14 +231,90 @@ async function run() {
     process.exit(1);
   }
 
+  // Auto-discover the correct list URL
+  if (!listUrl) {
+    console.log("[*] Discovering factory list URL...");
+
+    // First, try to find links from the homepage
+    try {
+      const { data } = await axios.get(BASE_URL, { headers: HEADERS, timeout: 20000 });
+      const $ = cheerio.load(data);
+      $("a[href]").each((_, el) => {
+        const href = $(el).attr("href") || "";
+        const text = $(el).text().trim().toLowerCase();
+        if (/factory|member|factory.list|member.list/.test(text) || /factory|member/.test(href)) {
+          const fullUrl = href.startsWith("http") ? href : `${BASE_URL}${href.startsWith("/") ? "" : "/"}${href}`;
+          if (!CANDIDATE_LIST_URLS.includes(fullUrl)) {
+            CANDIDATE_LIST_URLS.unshift(fullUrl);
+          }
+          console.log(`    Found link: "${$(el).text().trim()}" -> ${fullUrl}`);
+        }
+      });
+    } catch (err) {
+      console.log(`    Could not parse homepage: ${err.message}`);
+    }
+
+    // Try each candidate URL
+    for (const url of CANDIDATE_LIST_URLS) {
+      try {
+        const resp = await axios.get(url, { headers: HEADERS, timeout: 15000 });
+        if (resp.status === 200) {
+          const $ = cheerio.load(resp.data);
+          const text = $("body").text().toLowerCase();
+          // Check if page has factory/member content
+          if (text.includes("bin") || text.includes("factory") || $("table").length > 0) {
+            listUrl = url;
+            console.log(`    SUCCESS: ${url}\n`);
+            break;
+          }
+        }
+      } catch (err) {
+        // 404/500 etc - try next
+      }
+      await sleep(500);
+    }
+
+    if (!listUrl) {
+      console.log("\n[!] Could not find the factory list URL automatically.");
+      console.log("    Open https://www.bgmea.com.bd in your browser,");
+      console.log("    find the 'Member List' or 'Factory List' page,");
+      console.log("    then run:");
+      console.log("    node scrapers/bgmea.js --url <the_url>\n");
+      process.exit(1);
+    }
+  } else {
+    console.log(`[*] Using provided URL: ${listUrl}\n`);
+  }
+
   const allRecords = [];
   const seenBins = new Set();
   let page = 1;
   const maxPages = 300;
 
   while (page <= maxPages) {
-    const url = `${LIST_URL}?page=${page}`;
+    // Try different pagination patterns
+    const pageUrl = listUrl.includes("?")
+      ? `${listUrl}&page=${page}`
+      : `${listUrl}?page=${page}`;
     process.stdout.write(`[*] Page ${page}... `);
+
+    const { records, $ } = await scrapePage(pageUrl);
+
+    // If page=1 gives 404, try without ?page=
+    if (!records.length && page === 1) {
+      console.log("trying base URL...");
+      const base = await scrapePage(listUrl);
+      if (base.records.length) {
+        let n = 0;
+        for (const r of base.records) {
+          if (!seenBins.has(r.bin_number)) { seenBins.add(r.bin_number); allRecords.push(r); n++; }
+        }
+        console.log(`[*] Page 1 (base)... +${n} new BINs (total unique: ${allRecords.length})`);
+        page++;
+        await sleep(DELAY_MS);
+        continue;
+      }
+    }
 
     const { records, $ } = await scrapePage(url);
 
