@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node index.js",
     "bgmea": "node scrapers/bgmea.js",
-    "bida": "node scrapers/bida.js"
+    "bida": "node scrapers/bida.js",
+    "nbr": "node scrapers/nbr-bin-verify.js"
   },
   "dependencies": {
     "axios": "^1.7.0",
