@@ -1,0 +1,16 @@
+{
+  "name": "bangladesh-bin-crawler",
+  "version": "1.0.0",
+  "description": "Crawl Bangladesh NBR Business Identification Numbers (BIN) from BGMEA & BIDA",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "bgmea": "node scrapers/bgmea.js",
+    "bida": "node scrapers/bida.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.0",
+    "cheerio": "^1.0.0",
+    "csv-writer": "^1.6.0"
+  }
+}
